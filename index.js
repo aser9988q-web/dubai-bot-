@@ -1,74 +1,107 @@
-const { chromium } = require("playwright");
 const express = require("express");
+const { chromium } = require("playwright");
 const admin = require("firebase-admin");
-const app = express();
-const PORT = process.env.PORT || 10000;
 
-// التعديل الجوهري هنا يا هندسة: نخليه يستخدم إعدادات البيئة تلقائياً
-if (!admin.apps.length) {
-    admin.initializeApp({
-        // هنا سحبنا المشروع من المتغير اللي حطيناه في Render
-        credential: admin.credential.applicationDefault(),
-        projectId: process.env.GCLOUD_PROJECT || "jusour-qatar"
-    });
-}
-const db = admin.firestore();
+// ============================
+// FIREBASE INIT (بدون service account)
+// ============================
 
-async function getDubaiFines(plateNumber, plateCode, plateSource) {
-    const browser = await chromium.launch({ 
-        headless: true,
-        args: ['--no-sandbox', '--disable-setuid-sandbox'] 
-    });
-    const context = await browser.newContext();
-    const page = await context.newPage();
-    try {
-        console.log(`[البوت] بدأ البحث عن اللوحة: ${plateNumber}`);
-        await page.goto("https://www.dubaipolice.gov.ae/wps/portal/home/services/individualservicescontent/trafficfines", { waitUntil: "networkidle" });
-        
-        await page.fill("#plateNumber", plateNumber);
-        await page.selectOption("#plateCode", plateCode);
-        await page.selectOption("#plateSource", plateSource);
-        await page.click("#searchBtn");
-        
-        await page.waitForSelector(".fines-table", { timeout: 15000 });
-        
-        const totalAmount = await page.evaluate(() => {
-            let total = 0;
-            document.querySelectorAll(".fines-table tbody tr").forEach(row => {
-                const fineText = row.querySelectorAll("td")[2]?.innerText.replace(/[^\d]/g, '') || "0";
-                total += parseInt(fineText);
-            });
-            return total;
-        });
-
-        await browser.close();
-        return totalAmount;
-    } catch (error) {
-        await browser.close();
-        console.error("خطأ جلب البيانات:", error.message);
-        return "0"; 
-    }
-}
-
-// مراقبة الطلبات الجديدة
-db.collection("orders").where("status", "==", "pending").onSnapshot(snapshot => {
-    snapshot.docChanges().forEach(async (change) => {
-        if (change.type === "added") {
-            const data = change.doc.data();
-            const docId = change.doc.id;
-            console.log(`[!] اكتشاف طلب جديد للوحة: ${data.plate_number}`);
-
-            const amount = await getDubaiFines(data.plate_number, data.plate_code, data.plate_source);
-
-            await db.collection("orders").doc(docId).update({
-                total_fines: amount + " AED",
-                status: "completed",
-                last_bot_update: admin.firestore.FieldValue.serverTimestamp()
-            });
-            console.log(`[✓] تم تحديث الطلب ${docId} بنجاح بقيمة ${amount} AED`);
-        }
-    });
+admin.initializeApp({
+  projectId: process.env.GCLOUD_PROJECT || "jusour-qatar",
 });
 
-app.get("/", (req, res) => res.send("Bot is Running and Monitoring Firebase..."));
-app.listen(PORT, () => console.log("Server Active on Port " + PORT));
+const db = admin.firestore();
+
+// ============================
+// EXPRESS SERVER
+// ============================
+
+const app = express();
+
+app.get("/", (req, res) => {
+  res.send("Bot is running 🚀");
+});
+
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+  console.log("Server running on port", PORT);
+});
+
+// ============================
+// PLAYWRIGHT FUNCTION
+// ============================
+
+async function getTrafficFine(plateNumber, code) {
+  const browser = await chromium.launch({
+    headless: true,
+    args: ["--no-sandbox", "--disable-setuid-sandbox"],
+  });
+
+  const page = await browser.newPage();
+
+  try {
+    await page.goto(
+      "https://traffic.dubaipolice.gov.ae/trafficservices/fines"
+    );
+
+    await page.waitForTimeout(3000);
+
+    await page.fill("#plateNumber", plateNumber);
+    await page.fill("#code", code);
+
+    await page.click("#searchButton");
+
+    await page.waitForTimeout(5000);
+
+    const result = await page.evaluate(() => {
+      const el = document.querySelector(".fine-result");
+      return el ? el.innerText : "No fines found";
+    });
+
+    await browser.close();
+
+    return result;
+  } catch (err) {
+    await browser.close();
+    throw err;
+  }
+}
+
+// ============================
+// WATCH ORDERS COLLECTION
+// ============================
+
+console.log("Listening for new orders...");
+
+db.collection("orders")
+  .where("status", "==", "pending")
+  .onSnapshot(async (snapshot) => {
+    for (const doc of snapshot.docs) {
+      const data = doc.data();
+
+      console.log("New order detected:", doc.id);
+
+      try {
+        const result = await getTrafficFine(
+          data.plateNumber,
+          data.code
+        );
+
+        await db.collection("orders").doc(doc.id).update({
+          status: "done",
+          result: result,
+          processedAt: new Date(),
+        });
+
+        console.log("Order processed:", doc.id);
+      } catch (error) {
+        console.error("Error processing order:", error);
+
+        await db.collection("orders").doc(doc.id).update({
+          status: "error",
+          error: error.message,
+        });
+      }
+    }
+  });
