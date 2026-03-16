@@ -3,14 +3,17 @@ const { chromium } = require("playwright");
 const admin = require("firebase-admin");
 
 // ============================
-// FIREBASE INIT (بدون service account)
+// FIREBASE INIT (بدون serviceAccount)
 // ============================
 
 admin.initializeApp({
   projectId: process.env.GCLOUD_PROJECT || "jusour-qatar",
+  credential: admin.credential.applicationDefault(),
 });
 
 const db = admin.firestore();
+
+console.log("Connected to Firestore");
 
 // ============================
 // EXPRESS SERVER
@@ -25,7 +28,7 @@ app.get("/", (req, res) => {
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
-  console.log("Server running on port", PORT);
+  console.log("Server running on port " + PORT);
 });
 
 // ============================
@@ -33,38 +36,51 @@ app.listen(PORT, () => {
 // ============================
 
 async function getTrafficFine(plateNumber, code) {
+
   const browser = await chromium.launch({
     headless: true,
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    args: ["--no-sandbox", "--disable-setuid-sandbox"]
   });
 
   const page = await browser.newPage();
 
   try {
+
     await page.goto(
-      "https://traffic.dubaipolice.gov.ae/trafficservices/fines"
+      "https://traffic.dubaipolice.gov.ae/trafficservices/fines",
+      { waitUntil: "domcontentloaded" }
     );
 
-    await page.waitForTimeout(3000);
+    await page.waitForTimeout(4000);
 
     await page.fill("#plateNumber", plateNumber);
     await page.fill("#code", code);
 
     await page.click("#searchButton");
 
-    await page.waitForTimeout(5000);
+    await page.waitForTimeout(6000);
 
     const result = await page.evaluate(() => {
+
       const el = document.querySelector(".fine-result");
-      return el ? el.innerText : "No fines found";
+
+      if (el) {
+        return el.innerText;
+      }
+
+      return "No fines found";
+
     });
 
     await browser.close();
 
     return result;
+
   } catch (err) {
+
     await browser.close();
     throw err;
+
   }
 }
 
@@ -72,17 +88,20 @@ async function getTrafficFine(plateNumber, code) {
 // WATCH ORDERS COLLECTION
 // ============================
 
-console.log("Listening for new orders...");
+console.log("Listening for orders...");
 
 db.collection("orders")
   .where("status", "==", "pending")
   .onSnapshot(async (snapshot) => {
+
     for (const doc of snapshot.docs) {
+
       const data = doc.data();
 
-      console.log("New order detected:", doc.id);
+      console.log("New order:", doc.id);
 
       try {
+
         const result = await getTrafficFine(
           data.plateNumber,
           data.code
@@ -91,17 +110,24 @@ db.collection("orders")
         await db.collection("orders").doc(doc.id).update({
           status: "done",
           result: result,
-          processedAt: new Date(),
+          processedAt: new Date()
         });
 
-        console.log("Order processed:", doc.id);
+        console.log("Order completed:", doc.id);
+
       } catch (error) {
-        console.error("Error processing order:", error);
+
+        console.error("Processing error:", error);
 
         await db.collection("orders").doc(doc.id).update({
           status: "error",
-          error: error.message,
+          error: error.message
         });
+
       }
+
     }
+
+  }, (error) => {
+    console.error("Firestore listener error:", error);
   });
