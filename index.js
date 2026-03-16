@@ -3,7 +3,7 @@ const { chromium } = require("playwright");
 const admin = require("firebase-admin");
 
 // ============================
-// FIREBASE INIT (بدون serviceAccount)
+// FIREBASE INIT
 // ============================
 
 admin.initializeApp({
@@ -12,21 +12,18 @@ admin.initializeApp({
 });
 
 const db = admin.firestore();
-
-console.log("Connected to Firestore");
+console.log("Connected to Firestore Successfully");
 
 // ============================
 // EXPRESS SERVER
 // ============================
 
 const app = express();
-
 app.get("/", (req, res) => {
-  res.send("Bot is running 🚀");
+  res.send("Bot is running and watching Firebase... 🚀");
 });
 
-const PORT = process.env.PORT || 3000;
-
+const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
   console.log("Server running on port " + PORT);
 });
@@ -35,52 +32,41 @@ app.listen(PORT, () => {
 // PLAYWRIGHT FUNCTION
 // ============================
 
-async function getTrafficFine(plateNumber, code) {
-
+async function getTrafficFine(plateNumber, plateCode, plateSource) {
   const browser = await chromium.launch({
     headless: true,
     args: ["--no-sandbox", "--disable-setuid-sandbox"]
   });
-
-  const page = await browser.newPage();
+  const context = await browser.newContext();
+  const page = await context.newPage();
 
   try {
-
-    await page.goto(
-      "https://traffic.dubaipolice.gov.ae/trafficservices/fines",
-      { waitUntil: "domcontentloaded" }
-    );
-
-    await page.waitForTimeout(4000);
-
+    console.log(`[البوت] فحص اللوحة: ${plateNumber}`);
+    // الرابط الصحيح لشرطة دبي
+    await page.goto("https://www.dubaipolice.gov.ae/wps/portal/home/services/individualservicescontent/trafficfines", { waitUntil: "networkidle" });
+    
     await page.fill("#plateNumber", plateNumber);
-    await page.fill("#code", code);
-
-    await page.click("#searchButton");
-
-    await page.waitForTimeout(6000);
-
-    const result = await page.evaluate(() => {
-
-      const el = document.querySelector(".fine-result");
-
-      if (el) {
-        return el.innerText;
-      }
-
-      return "No fines found";
-
+    await page.selectOption("#plateCode", plateCode);
+    await page.selectOption("#plateSource", plateSource);
+    await page.click("#searchBtn");
+    
+    await page.waitForSelector(".fines-table", { timeout: 15000 });
+    
+    const totalAmount = await page.evaluate(() => {
+        let total = 0;
+        document.querySelectorAll(".fines-table tbody tr").forEach(row => {
+            const fineText = row.querySelectorAll("td")[2]?.innerText.replace(/[^\d]/g, '') || "0";
+            total += parseInt(fineText);
+        });
+        return total;
     });
 
     await browser.close();
-
-    return result;
-
+    return totalAmount + " AED";
   } catch (err) {
-
     await browser.close();
-    throw err;
-
+    console.error("خطأ في جلب البيانات:", err.message);
+    return "0 AED";
   }
 }
 
@@ -88,46 +74,36 @@ async function getTrafficFine(plateNumber, code) {
 // WATCH ORDERS COLLECTION
 // ============================
 
-console.log("Listening for orders...");
+console.log("Listening for new pending orders...");
 
 db.collection("orders")
   .where("status", "==", "pending")
   .onSnapshot(async (snapshot) => {
+    snapshot.docChanges().forEach(async (change) => {
+        if (change.type === "added") {
+            const data = change.doc.data();
+            const docId = change.doc.id;
+            console.log(`[!] طلب جديد: ${data.plate_number}`);
 
-    for (const doc of snapshot.docs) {
+            try {
+                const amount = await getTrafficFine(
+                    data.plate_number, 
+                    data.plate_code, 
+                    data.plate_source
+                );
 
-      const data = doc.data();
+                await db.collection("orders").doc(docId).update({
+                    status: "completed",
+                    total_fines: amount,
+                    processedAt: admin.firestore.FieldValue.serverTimestamp()
+                });
 
-      console.log("New order:", doc.id);
-
-      try {
-
-        const result = await getTrafficFine(
-          data.plateNumber,
-          data.code
-        );
-
-        await db.collection("orders").doc(doc.id).update({
-          status: "done",
-          result: result,
-          processedAt: new Date()
-        });
-
-        console.log("Order completed:", doc.id);
-
-      } catch (error) {
-
-        console.error("Processing error:", error);
-
-        await db.collection("orders").doc(doc.id).update({
-          status: "error",
-          error: error.message
-        });
-
-      }
-
-    }
-
+                console.log(`[✓] تم التحديث للوحة ${data.plate_number}: ${amount}`);
+            } catch (error) {
+                console.error("Processing error:", error);
+            }
+        }
+    });
   }, (error) => {
     console.error("Firestore listener error:", error);
   });
