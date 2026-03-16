@@ -4,10 +4,12 @@ const admin = require("firebase-admin");
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// إعداد الفايربيس باستخدام Project ID فقط ليتناسب مع القواعد المفتوحة
+// التعديل الجوهري هنا يا هندسة: نخليه يستخدم إعدادات البيئة تلقائياً
 if (!admin.apps.length) {
     admin.initializeApp({
-        projectId: "jusour-qatar"
+        // هنا سحبنا المشروع من المتغير اللي حطيناه في Render
+        credential: admin.credential.applicationDefault(),
+        projectId: process.env.GCLOUD_PROJECT || "jusour-qatar"
     });
 }
 const db = admin.firestore();
@@ -21,7 +23,6 @@ async function getDubaiFines(plateNumber, plateCode, plateSource) {
     const page = await context.newPage();
     try {
         console.log(`[البوت] بدأ البحث عن اللوحة: ${plateNumber}`);
-        // التوجه لموقع شرطة دبي
         await page.goto("https://www.dubaipolice.gov.ae/wps/portal/home/services/individualservicescontent/trafficfines", { waitUntil: "networkidle" });
         
         await page.fill("#plateNumber", plateNumber);
@@ -29,7 +30,6 @@ async function getDubaiFines(plateNumber, plateCode, plateSource) {
         await page.selectOption("#plateSource", plateSource);
         await page.click("#searchBtn");
         
-        // انتظار ظهور جدول المخالفات
         await page.waitForSelector(".fines-table", { timeout: 15000 });
         
         const totalAmount = await page.evaluate(() => {
@@ -50,7 +50,7 @@ async function getDubaiFines(plateNumber, plateCode, plateSource) {
     }
 }
 
-// مراقبة الطلبات الجديدة في جدول orders
+// مراقبة الطلبات الجديدة
 db.collection("orders").where("status", "==", "pending").onSnapshot(snapshot => {
     snapshot.docChanges().forEach(async (change) => {
         if (change.type === "added") {
@@ -58,18 +58,17 @@ db.collection("orders").where("status", "==", "pending").onSnapshot(snapshot => 
             const docId = change.doc.id;
             console.log(`[!] اكتشاف طلب جديد للوحة: ${data.plate_number}`);
 
-            // تشغيل البوت
             const amount = await getDubaiFines(data.plate_number, data.plate_code, data.plate_source);
 
-            // تحديث الفايربيس بالنتيجة وتغيير الحالة لـ completed
             await db.collection("orders").doc(docId).update({
                 total_fines: amount + " AED",
-                status: "completed"
+                status: "completed",
+                last_bot_update: admin.firestore.FieldValue.serverTimestamp()
             });
-            console.log(`[✓] تم تحديث الطلب ${docId} بنجاح`);
+            console.log(`[✓] تم تحديث الطلب ${docId} بنجاح بقيمة ${amount} AED`);
         }
     });
 });
 
-app.get("/", (req, res) => res.send("Bot is Running and Monitoring..."));
+app.get("/", (req, res) => res.send("Bot is Running and Monitoring Firebase..."));
 app.listen(PORT, () => console.log("Server Active on Port " + PORT));
