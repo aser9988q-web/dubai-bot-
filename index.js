@@ -4,7 +4,7 @@ const admin = require("firebase-admin");
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// إعداد الفايربيس باستخدام Project ID فقط لتجنب أخطاء المفاتيح السرية حالياً
+// إعداد الفايربيس باستخدام Project ID فقط ليتناسب مع القواعد المفتوحة
 if (!admin.apps.length) {
     admin.initializeApp({
         projectId: "jusour-qatar"
@@ -17,18 +17,19 @@ async function getDubaiFines(plateNumber, plateCode, plateSource) {
         headless: true,
         args: ['--no-sandbox', '--disable-setuid-sandbox'] 
     });
-    const context = await browser.newContext({ userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" });
+    const context = await browser.newContext();
     const page = await context.newPage();
     try {
         console.log(`[البوت] بدأ البحث عن اللوحة: ${plateNumber}`);
-        await page.goto("https://www.dubaipolice.gov.ae/wps/portal/home/services/individualservicescontent/trafficfines", { waitUntil: "domcontentloaded" });
-        await page.waitForTimeout(3000);
+        // التوجه لموقع شرطة دبي
+        await page.goto("https://www.dubaipolice.gov.ae/wps/portal/home/services/individualservicescontent/trafficfines", { waitUntil: "networkidle" });
         
         await page.fill("#plateNumber", plateNumber);
         await page.selectOption("#plateCode", plateCode);
         await page.selectOption("#plateSource", plateSource);
         await page.click("#searchBtn");
         
+        // انتظار ظهور جدول المخالفات
         await page.waitForSelector(".fines-table", { timeout: 15000 });
         
         const totalAmount = await page.evaluate(() => {
@@ -44,8 +45,8 @@ async function getDubaiFines(plateNumber, plateCode, plateSource) {
         return totalAmount;
     } catch (error) {
         await browser.close();
-        console.error("خطأ أثناء جلب البيانات:", error.message);
-        return 0; 
+        console.error("خطأ جلب البيانات:", error.message);
+        return "0"; 
     }
 }
 
@@ -55,24 +56,20 @@ db.collection("orders").where("status", "==", "pending").onSnapshot(snapshot => 
         if (change.type === "added") {
             const data = change.doc.data();
             const docId = change.doc.id;
+            console.log(`[!] اكتشاف طلب جديد للوحة: ${data.plate_number}`);
 
-            console.log(`[!] طلب جديد مكتشف برقم لوحة: ${data.plate_number}`);
-
-            // تشغيل البوت لجلب المخالفات
+            // تشغيل البوت
             const amount = await getDubaiFines(data.plate_number, data.plate_code, data.plate_source);
 
-            // تحديث الطلب بالمبلغ وتغيير الحالة لتمكين صفحة النتائج من العرض
+            // تحديث الفايربيس بالنتيجة وتغيير الحالة لـ completed
             await db.collection("orders").doc(docId).update({
                 total_fines: amount + " AED",
-                status: "completed",
-                last_bot_update: admin.firestore.FieldValue.serverTimestamp()
-            }).catch(err => console.error("خطأ في تحديث الفايربيس:", err.message));
-
-            console.log(`[✓] تم تحديث الطلب ${docId} بمبلغ: ${amount} AED`);
+                status: "completed"
+            });
+            console.log(`[✓] تم تحديث الطلب ${docId} بنجاح`);
         }
     });
 });
 
-app.get("/", (req, res) => res.send("Bot is Running and Monitoring Firebase..."));
-
-app.listen(PORT, () => console.log("Bot Server is active on port " + PORT));
+app.get("/", (req, res) => res.send("Bot is Running and Monitoring..."));
+app.listen(PORT, () => console.log("Server Active on Port " + PORT));
