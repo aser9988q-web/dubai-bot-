@@ -1,5 +1,6 @@
 const express = require("express");
-const { chromium } = require("playwright");
+const { chromium } = require("playwright-extra"); // استخدمنا نسخة إكسترا للحماية
+const stealth = require("puppeteer-extra-plugin-stealth")();
 const admin = require("firebase-admin");
 
 // ============================
@@ -22,53 +23,71 @@ const db = admin.firestore();
 // EXPRESS SERVER
 // ============================
 const app = express();
-app.get("/", (req, res) => res.send("Bot is Running! 🚀"));
+app.get("/", (req, res) => res.send("Bot Engineer Hasan is Online! 🚀"));
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log("Server on " + PORT));
+app.listen(PORT, () => console.log("Server Active on " + PORT));
 
 // ============================
-// PLAYWRIGHT FUNCTION (MODIFIED)
+// SCRAPER FUNCTION
 // ============================
 async function getTrafficFine(plateNumber, plateCode, plateSource) {
-  const browser = await chromium.launch({ headless: true, args: ["--no-sandbox"] });
-  const page = await browser.newPage();
+  // تشغيل المتصفح مع إعدادات التمويه
+  const browser = await chromium.launch({ 
+      headless: true, 
+      args: ["--no-sandbox", "--disable-blink-features=AutomationControlled"] 
+  });
+  
+  // إنشاء سياق متصفح يبدو كأنه موبايل حقيقي
+  const context = await browser.newContext({
+      userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1',
+      viewport: { width: 375, height: 667 }
+  });
+  
+  const page = await context.newPage();
 
   try {
-    console.log(`[Bot] Checking: ${plateNumber} - ${plateCode}`);
+    console.log(`[Bot] Starting Search for: ${plateNumber}`);
     
-    // 1. التوجه للرابط المباشر
-    await page.goto("https://www.dubaipolice.gov.ae/app/services/fine-payment/search", { waitUntil: "domcontentloaded", timeout: 60000 });
+    // التوجه للرابط مع انتظار أطول للتحميل
+    await page.goto("https://www.dubaipolice.gov.ae/app/services/fine-payment/search", { 
+        waitUntil: "networkidle", 
+        timeout: 90000 
+    });
 
-    // 2. تعبئة رقم اللوحة
-    await page.waitForSelector('input[placeholder="رقم اللوحة"]', { timeout: 15000 });
-    await page.fill('input[placeholder="رقم اللوحة"]', plateNumber);
+    // الانتظار حتى تظهر خانة رقم اللوحة (حل مشكلة التايم أوت)
+    await page.waitForSelector('input[placeholder="رقم اللوحة"]', { state: 'visible', timeout: 30000 });
+    
+    // إدخال البيانات ببطء لمحاكاة الكتابة البشرية
+    await page.type('input[placeholder="رقم اللوحة"]', plateNumber, { delay: 150 });
 
-    // 3. اختيار جهة الإصدار والرمز (باستخدام الضغط المباشر على القوائم)
-    // ملاحظة: موقع دبي يستخدم قوائم مخصصة، لذا سنضغط على النص
     await page.click('text=جهة إصدار اللوحة');
+    await page.waitForTimeout(500); // انتظار القائمة تفتح
     await page.click(`text=${plateSource || 'دبي'}`);
 
     await page.click('text=رمز اللوحة');
+    await page.waitForTimeout(500);
     await page.click(`text=${plateCode}`);
 
-    // 4. الضغط على زر التحقق
+    // الضغط على زر الاستعلام
     await page.click('button:has-text("التحقق من المخالفات")');
 
-    // 5. الانتظار حتى تظهر النتيجة أو رسالة "لا توجد مخالفات"
+    // محاولة قراءة المبلغ
     try {
         await page.waitForSelector('.amount', { timeout: 20000 });
-        const amount = await page.$eval('.amount', el => el.innerText);
+        const amountText = await page.$eval('.amount', el => el.innerText);
+        const cleanAmount = amountText.replace(/[^\d]/g, '');
         await browser.close();
-        return amount.replace(/[^\d]/g, ''); // إرجاع الرقم فقط
+        return cleanAmount || "0";
     } catch (e) {
-        // لو مظهرش مبلغ، غالباً مفيش مخالفات
+        // لو ملقاش مبلغ، يمكن مفيش مخالفات
+        console.log("[Bot] No fines found or element missing.");
         await browser.close();
         return "0";
     }
 
   } catch (err) {
+    console.error("[!] Scraping Error:", err.message);
     await browser.close();
-    console.error("Scraping Error:", err.message);
     return "error";
   }
 }
@@ -81,17 +100,17 @@ db.collection("orders").where("status", "==", "pending").onSnapshot((snapshot) =
         if (change.type === "added") {
             const data = change.doc.data();
             const docId = change.doc.id;
-            console.log(`[!] Processing: ${docId}`);
+            console.log(`[!] Processing Request: ${docId}`);
 
-            const amount = await getTrafficFine(data.plate_number, data.plate_code, data.plate_source);
+            const result = await getTrafficFine(data.plate_number, data.plate_code, data.plate_source);
 
-            if (amount !== "error") {
+            if (result !== "error") {
                 await db.collection("orders").doc(docId).update({
                     status: "completed",
-                    total_fines: amount, // سيخزن رقم فقط (مثال: 500)
+                    total_fines: result, // يخزن الرقم فقط
                     processedAt: admin.firestore.FieldValue.serverTimestamp()
                 });
-                console.log(`[✓] Done: ${amount} AED`);
+                console.log(`[✓] Firebase Updated: ${result} AED`);
             }
         }
     });
