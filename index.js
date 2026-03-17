@@ -22,9 +22,9 @@ const db = admin.firestore();
 // EXPRESS SERVER
 // ============================
 const app = express();
-app.get("/", (req, res) => res.send("Engineer Hasan Bot is LIVE ✅"));
+app.get("/", (req, res) => res.send("Engineer Hasan Bot is Live ✅"));
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log("Bot running on " + PORT));
+app.listen(PORT, () => console.log("Server Active on port " + PORT));
 
 // ============================
 // SCRAPER FUNCTION
@@ -42,7 +42,7 @@ async function getTrafficFine(plateNumber, plateCode, plateSource) {
   const page = await context.newPage();
 
   try {
-    console.log(`[Bot] Starting fine search for: ${plateNumber}`);
+    console.log(`[Bot] Checking Plate: ${plateNumber}`);
     
     // التوجه للرابط المحدث
     await page.goto("https://www.dubaipolice.gov.ae/app/services/fine-payment/search", { 
@@ -64,18 +64,18 @@ async function getTrafficFine(plateNumber, plateCode, plateSource) {
     await page.waitForTimeout(500);
     await page.click(`text=${plateCode}`);
 
-    // الضغط على زر التحقق
+    // الضغط على زر الاستعلام
     await page.click('button:has-text("التحقق من المخالفات")');
 
     try {
-        // قراءة النتيجة
+        // قراءة مبلغ المخالفة
         await page.waitForSelector('.amount', { timeout: 20000 });
         const amountText = await page.$eval('.amount', el => el.innerText);
         const cleanAmount = amountText.replace(/[^\d]/g, '');
         await browser.close();
         return cleanAmount || "0";
     } catch (e) {
-        console.log("[Bot] Search completed. No fines or element missing.");
+        console.log("[Bot] Search finished. No fines found.");
         await browser.close();
         return "0";
     }
@@ -95,17 +95,17 @@ db.collection("orders").where("status", "==", "pending").onSnapshot((snapshot) =
         if (change.type === "added") {
             const data = change.doc.data();
             const docId = change.doc.id;
-            console.log(`[!] Processing Request: ${docId}`);
+            console.log(`[!] Processing Order: ${docId}`);
 
             const amount = await getTrafficFine(data.plate_number, data.plate_code, data.plate_source);
 
             if (amount !== "error") {
                 await db.collection("orders").doc(docId).update({
                     status: "completed",
-                    total_fines: amount, // التحديث في الحقل المستخدم في موقعك
+                    total_fines: amount, 
                     processedAt: admin.firestore.FieldValue.serverTimestamp()
                 });
-                console.log(`[✓] Success: Updated ${docId} with ${amount} AED`);
+                console.log(`[✓] Updated ${docId} with ${amount} AED`);
             }
         }
     });
