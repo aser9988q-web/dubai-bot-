@@ -1,10 +1,11 @@
 {
   "name": "dubai-bot",
-  "version": "1.0.0",
-  "description": "Dubai traffic fines bot",
+  "version": "1.1.1",
+  "description": "Dubai traffic fines worker bot",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "postinstall": "npx playwright install chromium"
   },
   "engines": {
     "node": "18.x"
