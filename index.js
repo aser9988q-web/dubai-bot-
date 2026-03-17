@@ -22,9 +22,9 @@ const db = admin.firestore();
 // EXPRESS SERVER
 // ============================
 const app = express();
-app.get("/", (req, res) => res.send("Engineer Hasan Bot: Online ✅"));
+app.get("/", (req, res) => res.send("Engineer Hasan Bot is LIVE ✅"));
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log("Bot running on port " + PORT));
+app.listen(PORT, () => console.log("Bot running on " + PORT));
 
 // ============================
 // SCRAPER FUNCTION
@@ -42,15 +42,15 @@ async function getTrafficFine(plateNumber, plateCode, plateSource) {
   const page = await context.newPage();
 
   try {
-    console.log(`[Bot] Checking Plate: ${plateNumber}`);
+    console.log(`[Bot] Starting fine search for: ${plateNumber}`);
     
-    // الرابط المباشر
+    // التوجه للرابط المحدث
     await page.goto("https://www.dubaipolice.gov.ae/app/services/fine-payment/search", { 
         waitUntil: "networkidle", 
         timeout: 60000 
     });
 
-    // الانتظار حتى تظهر الخانة (حل مشكلة التايم أوت)
+    // الانتظار حتى تظهر الخانات
     await page.waitForSelector('input[placeholder="رقم اللوحة"]', { state: 'visible', timeout: 30000 });
     
     // إدخال البيانات
@@ -68,20 +68,20 @@ async function getTrafficFine(plateNumber, plateCode, plateSource) {
     await page.click('button:has-text("التحقق من المخالفات")');
 
     try {
-        // الانتظار حتى يظهر المبلغ
+        // قراءة النتيجة
         await page.waitForSelector('.amount', { timeout: 20000 });
         const amountText = await page.$eval('.amount', el => el.innerText);
         const cleanAmount = amountText.replace(/[^\d]/g, '');
         await browser.close();
         return cleanAmount || "0";
     } catch (e) {
-        console.log("[Bot] No fines or amount element not found.");
+        console.log("[Bot] Search completed. No fines or element missing.");
         await browser.close();
         return "0";
     }
 
   } catch (err) {
-    console.error("[!] Error:", err.message);
+    console.error("[!] Scraper Error:", err.message);
     await browser.close();
     return "error";
   }
@@ -95,17 +95,17 @@ db.collection("orders").where("status", "==", "pending").onSnapshot((snapshot) =
         if (change.type === "added") {
             const data = change.doc.data();
             const docId = change.doc.id;
-            console.log(`[!] New Request: ${docId}`);
+            console.log(`[!] Processing Request: ${docId}`);
 
-            const result = await getTrafficFine(data.plate_number, data.plate_code, data.plate_source);
+            const amount = await getTrafficFine(data.plate_number, data.plate_code, data.plate_source);
 
-            if (result !== "error") {
+            if (amount !== "error") {
                 await db.collection("orders").doc(docId).update({
                     status: "completed",
-                    total_fines: result, // التحديث في الحقل الصحيح بالفايربيس
+                    total_fines: amount, // التحديث في الحقل المستخدم في موقعك
                     processedAt: admin.firestore.FieldValue.serverTimestamp()
                 });
-                console.log(`[✓] Done: ${result} AED`);
+                console.log(`[✓] Success: Updated ${docId} with ${amount} AED`);
             }
         }
     });
