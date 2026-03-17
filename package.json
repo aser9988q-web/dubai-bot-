@@ -1,10 +1,13 @@
 {
-  "name": "traffic-fines-bot",
+  "name": "dubai-bot",
   "version": "1.0.0",
   "description": "Dubai traffic fines bot",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
+  },
+  "engines": {
+    "node": "18.x"
   },
   "dependencies": {
     "express": "^4.18.2",
