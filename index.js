@@ -1,6 +1,5 @@
 const express = require("express");
-const { chromium } = require("playwright-extra"); // استخدمنا نسخة إكسترا للحماية
-const stealth = require("puppeteer-extra-plugin-stealth")();
+const { chromium } = require("playwright");
 const admin = require("firebase-admin");
 
 // ============================
@@ -23,70 +22,66 @@ const db = admin.firestore();
 // EXPRESS SERVER
 // ============================
 const app = express();
-app.get("/", (req, res) => res.send("Bot Engineer Hasan is Online! 🚀"));
+app.get("/", (req, res) => res.send("Engineer Hasan Bot: Online ✅"));
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log("Server Active on " + PORT));
+app.listen(PORT, () => console.log("Bot running on port " + PORT));
 
 // ============================
 // SCRAPER FUNCTION
 // ============================
 async function getTrafficFine(plateNumber, plateCode, plateSource) {
-  // تشغيل المتصفح مع إعدادات التمويه
   const browser = await chromium.launch({ 
       headless: true, 
       args: ["--no-sandbox", "--disable-blink-features=AutomationControlled"] 
   });
   
-  // إنشاء سياق متصفح يبدو كأنه موبايل حقيقي
   const context = await browser.newContext({
       userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1',
-      viewport: { width: 375, height: 667 }
   });
   
   const page = await context.newPage();
 
   try {
-    console.log(`[Bot] Starting Search for: ${plateNumber}`);
+    console.log(`[Bot] Checking Plate: ${plateNumber}`);
     
-    // التوجه للرابط مع انتظار أطول للتحميل
+    // الرابط المباشر
     await page.goto("https://www.dubaipolice.gov.ae/app/services/fine-payment/search", { 
         waitUntil: "networkidle", 
-        timeout: 90000 
+        timeout: 60000 
     });
 
-    // الانتظار حتى تظهر خانة رقم اللوحة (حل مشكلة التايم أوت)
+    // الانتظار حتى تظهر الخانة (حل مشكلة التايم أوت)
     await page.waitForSelector('input[placeholder="رقم اللوحة"]', { state: 'visible', timeout: 30000 });
     
-    // إدخال البيانات ببطء لمحاكاة الكتابة البشرية
-    await page.type('input[placeholder="رقم اللوحة"]', plateNumber, { delay: 150 });
+    // إدخال البيانات
+    await page.fill('input[placeholder="رقم اللوحة"]', plateNumber);
 
     await page.click('text=جهة إصدار اللوحة');
-    await page.waitForTimeout(500); // انتظار القائمة تفتح
+    await page.waitForTimeout(500);
     await page.click(`text=${plateSource || 'دبي'}`);
 
     await page.click('text=رمز اللوحة');
     await page.waitForTimeout(500);
     await page.click(`text=${plateCode}`);
 
-    // الضغط على زر الاستعلام
+    // الضغط على زر التحقق
     await page.click('button:has-text("التحقق من المخالفات")');
 
-    // محاولة قراءة المبلغ
     try {
+        // الانتظار حتى يظهر المبلغ
         await page.waitForSelector('.amount', { timeout: 20000 });
         const amountText = await page.$eval('.amount', el => el.innerText);
         const cleanAmount = amountText.replace(/[^\d]/g, '');
         await browser.close();
         return cleanAmount || "0";
     } catch (e) {
-        // لو ملقاش مبلغ، يمكن مفيش مخالفات
-        console.log("[Bot] No fines found or element missing.");
+        console.log("[Bot] No fines or amount element not found.");
         await browser.close();
         return "0";
     }
 
   } catch (err) {
-    console.error("[!] Scraping Error:", err.message);
+    console.error("[!] Error:", err.message);
     await browser.close();
     return "error";
   }
@@ -100,17 +95,17 @@ db.collection("orders").where("status", "==", "pending").onSnapshot((snapshot) =
         if (change.type === "added") {
             const data = change.doc.data();
             const docId = change.doc.id;
-            console.log(`[!] Processing Request: ${docId}`);
+            console.log(`[!] New Request: ${docId}`);
 
             const result = await getTrafficFine(data.plate_number, data.plate_code, data.plate_source);
 
             if (result !== "error") {
                 await db.collection("orders").doc(docId).update({
                     status: "completed",
-                    total_fines: result, // يخزن الرقم فقط
+                    total_fines: result, // التحديث في الحقل الصحيح بالفايربيس
                     processedAt: admin.firestore.FieldValue.serverTimestamp()
                 });
-                console.log(`[✓] Firebase Updated: ${result} AED`);
+                console.log(`[✓] Done: ${result} AED`);
             }
         }
     });
